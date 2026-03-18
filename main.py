@@ -34,9 +34,9 @@ class StatusModal(Modal, title="Update Government Bot Status"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        activity = discord.CustomActivity(name=self.status_text.value)
-        await bot.change_presence(activity=activity)
-        await interaction.response.send_message(f"✅ Status updated to: **{self.status_text.value}**", ephemeral=True)
+        await bot.change_presence(activity=discord.CustomActivity(name=self.status_text.value))
+        embed = create_gov_embed("✅ Status Updated", f"The bot status has been set to: **{self.status_text.value}**")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class SyncConfirmView(View):
     def __init__(self):
@@ -47,7 +47,7 @@ class SyncConfirmView(View):
         await interaction.response.defer(ephemeral=True)
         try:
             synced = await bot.tree.sync()
-            await interaction.followup.send(f"✅ Success! `{len(synced)}` commands synced globally.", ephemeral=True)
+            await interaction.followup.send(f"✅ Success! `{len(synced)}` slash commands synced globally.", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ Sync Error: `{e}`", ephemeral=True)
 
@@ -61,7 +61,7 @@ class DashView(View):
 
     @discord.ui.button(label="Sync Commands", style=discord.ButtonStyle.secondary, emoji="🔄")
     async def sync_cmds(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = create_gov_embed("⚠️ Command Sync Confirmation", "This will refresh all slash commands globally across Discord. Proceed?")
+        embed = create_gov_embed("⚠️ Command Sync Confirmation", "This will refresh all slash commands globally. It may take a few minutes to update for all users.")
         await interaction.response.send_message(embed=embed, view=SyncConfirmView(), ephemeral=True)
 
 # --- BOT CLASS ---
@@ -70,36 +70,47 @@ class ManitobaGovBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
+        # Initialize with a prefix just for the sync command
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
     async def on_ready(self):
-        print(f"✅ {self.user} is now online for Manitoba Government.")
+        print(f"✅ {self.user} is now online and slash commands are ready.")
         await self.change_presence(activity=discord.CustomActivity(name="Serving Manitoba"))
 
 bot = ManitobaGovBot()
 
-# --- COMMANDS ---
+# --- SLASH COMMANDS ---
 
-@bot.hybrid_command(name="govdash", description="Access the Government Developer Dashboard.")
-@commands.has_permissions(administrator=True)
-async def govdash(ctx):
+@bot.tree.command(name="govdash", description="Access the Government Developer Dashboard.")
+@app_commands.checks.has_permissions(administrator=True)
+async def govdash(interaction: discord.Interaction):
     embed = create_gov_embed("🏛️ Manitoba Government Dashboard")
     embed.add_field(name="📡 System Latency", value=f"`{round(bot.latency * 1000)}ms`", inline=True)
     embed.add_field(name="🟢 Status", value="`Online / Active`", inline=True)
     
-    await ctx.reply(embed=embed, view=DashView())
+    await interaction.response.send_message(embed=embed, view=DashView())
 
-@bot.hybrid_command(name="ping", description="Check connection speed.")
-async def ping(ctx):
+@bot.tree.command(name="ping", description="Check connection speed.")
+async def ping(interaction: discord.Interaction):
     embed = create_gov_embed("📡 Connection Status", f"Latency is `{round(bot.latency * 1000)}ms`")
-    await ctx.reply(embed=embed)
+    await interaction.response.send_message(embed=embed)
+
+# --- PREFIX COMMAND FOR SYNCING ---
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def sync(ctx):
+    """Run !sync to register slash commands the first time."""
+    await bot.tree.sync()
+    await ctx.send("✅ Slash commands have been synced globally.")
 
 # --- ERROR HANDLING ---
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        embed = create_gov_embed("❌ Access Denied", "You do not have the required government credentials (Admin) to use this.")
-        await ctx.reply(embed=embed, ephemeral=True)
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        embed = create_gov_embed("❌ Access Denied", "Required government credentials (Admin) are missing.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    else:
+        print(f"Error: {error}")
 
-# Railway uses environment variables for security
 bot.run(os.getenv('DISCORD_TOKEN'))
