@@ -8,8 +8,13 @@ import pytz
 
 # --- CONFIGURATION ---
 GOV_GREEN = 0x0D7F43
-LOGO_URL = "https://media.discordapp.net/attachments/1296716507803291661/1483961280694976752/ManitobaGovLogo.png?ex=69bc7e23&is=69bb2ca3&hm=bdaf874707c014d72cd45a390203d02ca3138bcf25db83740900cfd3c06b513d&=&format=webp&quality=lossless&width=264&height=264"
+LOGO_URL = "https://media.discordapp.net/attachments/1296716507803291661/1483961280694976752/ManitobaGovLogo.png?ex=69bc7e23&is=69bb2ca3&hm=bdaf874707c014d72cd45a390203d02ca3138bcf25db83740900cfd3c06b513d"
 TIMEZONE = pytz.timezone('Canada/Central')
+
+# ROLE IDS
+PERMITTED_ROLES = [1481395679380246558, 1481395710745251870]
+PING_TARGET_ROLE = 1484021253340925992
+COOLDOWN_BYPASS_ROLE = 1481394167971188887
 
 # --- UTILITIES ---
 
@@ -23,46 +28,34 @@ def create_gov_embed(title, description=None):
     embed.set_footer(text=get_gov_timestamp())
     return embed
 
+def has_business_access(interaction: discord.Interaction) -> bool:
+    """Checks if the user has one of the two permitted business roles."""
+    return any(role.id in PERMITTED_ROLES for role in interaction.user.roles)
+
+def business_cooldown_check(interaction: discord.Interaction):
+    """Bypasses cooldown if user has the specific bypass role."""
+    if any(role.id == COOLDOWN_BYPASS_ROLE for role in interaction.user.roles):
+        return None  # No cooldown
+    return app_commands.Cooldown(1, 3600)  # 1 use per 3600 seconds (1 hour)
+
 # --- UI COMPONENTS ---
 
 class StatusModal(Modal, title="Update Government Bot Status"):
-    status_text = TextInput(
-        label="Status Message", 
-        placeholder="e.g., Serving Manitobans", 
-        required=True,
-        max_length=100
-    )
-
+    status_text = TextInput(label="Status Message", placeholder="e.g., Serving Manitobans", required=True, max_length=100)
     async def on_submit(self, interaction: discord.Interaction):
         await bot.change_presence(activity=discord.CustomActivity(name=self.status_text.value))
-        embed = create_gov_embed("✅ Status Updated", f"The bot status has been set to: **{self.status_text.value}**")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-class SyncConfirmView(View):
-    def __init__(self):
-        super().__init__(timeout=60)
-
-    @discord.ui.button(label="Confirm Global Sync", style=discord.ButtonStyle.danger, emoji="⚠️")
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        try:
-            synced = await bot.tree.sync()
-            await interaction.followup.send(f"✅ Success! `{len(synced)}` slash commands synced globally.", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Sync Error: `{e}`", ephemeral=True)
+        await interaction.response.send_message(embed=create_gov_embed("✅ Status Updated", f"Set to: **{self.status_text.value}**"), ephemeral=True)
 
 class DashView(View):
     def __init__(self):
         super().__init__(timeout=None)
-
     @discord.ui.button(label="Update Status", style=discord.ButtonStyle.primary, emoji="📢")
     async def set_status(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(StatusModal())
-
     @discord.ui.button(label="Sync Commands", style=discord.ButtonStyle.secondary, emoji="🔄")
     async def sync_cmds(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = create_gov_embed("⚠️ Command Sync Confirmation", "This will refresh all slash commands globally. It may take a few minutes to update for all users.")
-        await interaction.response.send_message(embed=embed, view=SyncConfirmView(), ephemeral=True)
+        await bot.tree.sync()
+        await interaction.response.send_message("✅ Commands Synced.", ephemeral=True)
 
 # --- BOT CLASS ---
 
@@ -70,47 +63,55 @@ class ManitobaGovBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
-        # Initialize with a prefix just for the sync command
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
     async def on_ready(self):
-        print(f"✅ {self.user} is now online and slash commands are ready.")
-        await self.change_presence(activity=discord.CustomActivity(name="Serving Manitoba"))
+        print(f"✅ {self.user} is online.")
 
 bot = ManitobaGovBot()
 
 # --- SLASH COMMANDS ---
 
-@bot.tree.command(name="govdash", description="Access the Government Developer Dashboard.")
+@bot.tree.command(name="businessping", description="Ping the business role (1hr cooldown).")
+@app_commands.checks.dynamic_cooldown(business_cooldown_check)
+async def businessping(interaction: discord.Interaction):
+    # 1. Permission Check
+    if not has_business_access(interaction):
+        return await interaction.response.send_message("❌ You do not have the required business roles to use this.", ephemeral=True)
+
+    # 2. Ephemeral Reply (only user sees this)
+    await interaction.response.send_message("I've sent your business ping!", ephemeral=True)
+
+    # 3. Public Ping (no embed)
+    content = (
+        f"<@&{PING_TARGET_ROLE}>\n"
+        f"-# This ping was sent by {interaction.user.mention}"
+    )
+    await interaction.channel.send(content=content)
+
+@bot.tree.command(name="govdash", description="Government Developer Dashboard.")
 @app_commands.checks.has_permissions(administrator=True)
 async def govdash(interaction: discord.Interaction):
-    embed = create_gov_embed("🏛️ Manitoba Government Dashboard")
-    embed.add_field(name="📡 System Latency", value=f"`{round(bot.latency * 1000)}ms`", inline=True)
-    embed.add_field(name="🟢 Status", value="`Online / Active`", inline=True)
-    
-    await interaction.response.send_message(embed=embed, view=DashView())
+    await interaction.response.send_message(embed=create_gov_embed("🏛️ Manitoba Government Dashboard"), view=DashView())
 
 @bot.tree.command(name="ping", description="Check connection speed.")
 async def ping(interaction: discord.Interaction):
-    embed = create_gov_embed("📡 Connection Status", f"Latency is `{round(bot.latency * 1000)}ms`")
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=create_gov_embed("📡 Connection Status", f"Latency is `{round(bot.latency * 1000)}ms`"))
 
 # --- PREFIX COMMAND FOR SYNCING ---
-
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def sync(ctx):
-    """Run !sync to register slash commands the first time."""
     await bot.tree.sync()
-    await ctx.send("✅ Slash commands have been synced globally.")
+    await ctx.send("✅ Slash commands synced.")
 
 # --- ERROR HANDLING ---
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.MissingPermissions):
-        embed = create_gov_embed("❌ Access Denied", "Required government credentials (Admin) are missing.")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    else:
-        print(f"Error: {error}")
+    if isinstance(error, app_commands.CommandOnCooldown):
+        minutes = round(error.retry_after / 60)
+        await interaction.response.send_message(f"⏳ **Cooldown active.** You can use this again in {minutes} minutes.", ephemeral=True)
+    elif isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ Admin permissions required.", ephemeral=True)
 
 bot.run(os.getenv('DISCORD_TOKEN'))
