@@ -14,7 +14,8 @@ TIMEZONE = pytz.timezone('Canada/Central')
 # ROLE IDS
 PERMITTED_ROLES = [1481395679380246558, 1481395710745251870]
 PING_TARGET_ROLE = 1484021253340925992
-COOLDOWN_BYPASS_ROLE = 1481394167971188887
+# Added the new bypass ID to this list
+COOLDOWN_BYPASS_ROLES = [1481394167971188887, 1481394073485971488]
 
 # --- UTILITIES ---
 
@@ -29,14 +30,13 @@ def create_gov_embed(title, description=None):
     return embed
 
 def has_business_access(interaction: discord.Interaction) -> bool:
-    """Checks if the user has one of the two permitted business roles."""
     return any(role.id in PERMITTED_ROLES for role in interaction.user.roles)
 
 def business_cooldown_check(interaction: discord.Interaction):
-    """Bypasses cooldown if user has the specific bypass role."""
-    if any(role.id == COOLDOWN_BYPASS_ROLE for role in interaction.user.roles):
-        return None  # No cooldown
-    return app_commands.Cooldown(1, 3600)  # 1 use per 3600 seconds (1 hour)
+    """Checks multiple roles for cooldown bypass."""
+    if any(role.id in COOLDOWN_BYPASS_ROLES for role in interaction.user.roles):
+        return None  # No cooldown applied
+    return app_commands.Cooldown(1, 3600)  # 1 hour cooldown for others
 
 # --- UI COMPONENTS ---
 
@@ -52,7 +52,7 @@ class DashView(View):
     @discord.ui.button(label="Update Status", style=discord.ButtonStyle.primary, emoji="📢")
     async def set_status(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(StatusModal())
-    @discord.ui.button(label="Sync Commands", style=discord.ButtonStyle.secondary, emoji="🔄")
+    @discord.ui.button(label="Sync Commands", style=discord.ButtonStyle.success, emoji="🔄")
     async def sync_cmds(self, interaction: discord.Interaction, button: discord.ui.Button):
         await bot.tree.sync()
         await interaction.response.send_message("✅ Commands Synced.", ephemeral=True)
@@ -75,14 +75,11 @@ bot = ManitobaGovBot()
 @bot.tree.command(name="businessping", description="Ping the business role (1hr cooldown).")
 @app_commands.checks.dynamic_cooldown(business_cooldown_check)
 async def businessping(interaction: discord.Interaction):
-    # 1. Permission Check
     if not has_business_access(interaction):
         return await interaction.response.send_message("❌ You do not have the required business roles to use this.", ephemeral=True)
 
-    # 2. Ephemeral Reply (only user sees this)
     await interaction.response.send_message("I've sent your business ping!", ephemeral=True)
 
-    # 3. Public Ping (no embed)
     content = (
         f"<@&{PING_TARGET_ROLE}>\n"
         f"-# This ping was sent by {interaction.user.mention}"
